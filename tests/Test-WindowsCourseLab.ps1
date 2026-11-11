@@ -35,6 +35,10 @@ $script:mockSwitch = $null
 $script:mockAttached = @()
 $script:removed = @()
 $script:manifestJson = ''
+$script:generatedFiles = @{}
+$script:isoContents = @{}
+$script:mockVolumes = @()
+$script:networkRan = $false
 $script:ManifestPath = 'E:\TestLab\lab.json'
 
 function Get-NetAdapter { param($Name, $ErrorAction) [pscustomobject]@{ ifIndex = 42 } }
@@ -58,13 +62,16 @@ function Test-Path { param($LiteralPath, $PathType) return $true }
 function Get-ChildItem { param($LiteralPath, [switch]$Force, $ErrorAction) return $script:mockFiles }
 function Read-Host { param($Prompt) $script:questions++; return $script:answer }
 function New-Item { param($ItemType, $Path, [switch]$Force) }
-function Set-Content { param($LiteralPath, $Value, $Encoding) $script:answerXml = $Value }
+function Set-Content { param($LiteralPath, $Value, $Encoding) $script:generatedFiles[$LiteralPath] = $Value }
 function Remove-Item { param($LiteralPath, [switch]$Recurse, [switch]$Force) $script:removed += $LiteralPath }
 function Set-PrivateAcl { param($Path) }
-function Invoke-MockOscdimg { $global:LASTEXITCODE = 0; 'oscdimg output'; 'finished' }
+function Invoke-MockOscdimg { $script:isoContents = $script:generatedFiles.Clone(); $global:LASTEXITCODE = 0; 'oscdimg output'; 'finished' }
 function Test-IsAdministrator { return $true }
 function Confirm-Change { param($Message) return $true }
 function Get-Content { param($LiteralPath, [switch]$Raw) return $script:manifestJson }
+function Get-Volume { param($FileSystemLabel, $ErrorAction) return $script:mockVolumes }
+function Invoke-MockNetwork { $script:networkRan = $true }
+Set-Alias -Name 'E:\LabNetwork.ps1' -Value Invoke-MockNetwork -Scope Script
 function Remove-NetNat { [CmdletBinding(SupportsShouldProcess)] param([Parameter(ValueFromPipeline)]$InputObject) process { $script:removed += 'nat' } }
 function Remove-VMSwitch { [CmdletBinding(SupportsShouldProcess)] param([Parameter(ValueFromPipeline)]$InputObject, [switch]$Force) process { $script:removed += 'switch' } }
 function Assert-Throws {
@@ -108,15 +115,44 @@ Assert-Throws { Assert-LabFilePathsAvailable @{} } 'ei korvata'
 Assert-LabFilePathsAvailable @{ 'Course-Server1' = @{} }
 
 $script:Oscdimg = 'Invoke-MockOscdimg'
-$result = @(New-HyperVAnswerIso -Name 'Course-Server1' -ImageIndex 3 -Password 'TestPassword123!' `
-    -IpAddress '192.168.252.10' -Gateway '192.168.252.1' -Dns '192.168.252.1' -PrefixLength 24 -OsKind 'Server')
-if ($result.Count -ne 1 -or $result[0] -ne 'E:\TestLab\Course-Server1-answer.iso') { throw 'Vastaus-ISO:n paluuarvo on virheellinen.' }
-[xml]$xml = $script:answerXml
-$ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
-$ns.AddNamespace('u', 'urn:schemas-microsoft-com:unattend')
-if ($xml.SelectSingleNode('//u:Disk/u:WillWipeDisk', $ns).InnerText -ne 'true' -or
-    $xml.SelectSingleNode('//u:InstallTo/u:PartitionID', $ns).InnerText -ne '3' -or
-    $xml.SelectNodes('//u:CreatePartition', $ns).Count -ne 3) { throw 'UEFI-levymaarittely on virheellinen.' }
+foreach ($kind in @('Server', 'Client')) {
+    $script:generatedFiles = @{}
+    $result = @(New-HyperVAnswerIso -Name 'Course-Server1' -ImageIndex 3 -Password 'TestPassword123!' `
+        -IpAddress '192.168.252.10' -Gateway '192.168.252.1' -Dns '192.168.252.1' -PrefixLength 24 -OsKind $kind)
+    if ($result.Count -ne 1 -or $result[0] -ne 'E:\TestLab\Course-Server1-answer.iso') { throw 'Vastaus-ISO:n paluuarvo on virheellinen.' }
+    $networkPath = 'E:\TestLab\Course-Server1-answer\LabNetwork.ps1'
+    $xmlPath = 'E:\TestLab\Course-Server1-answer\Autounattend.xml'
+    if (-not $script:isoContents.ContainsKey($networkPath) -or -not $script:isoContents.ContainsKey($xmlPath)) {
+        throw 'Vastaus-ISOsta puuttuu verkkoskripti tai vastaustiedosto.'
+    }
+    $networkTokens = $null; $networkErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseInput($script:isoContents[$networkPath], [ref]$networkTokens, [ref]$networkErrors)
+    if ($networkErrors.Count -or $script:isoContents[$networkPath] -notmatch '192\.168\.252\.10') {
+        throw 'Vastaus-ISOn verkkoskripti on virheellinen.'
+    }
+    [xml]$xml = $script:isoContents[$xmlPath]
+    $ns = [Xml.XmlNamespaceManager]::new($xml.NameTable)
+    $ns.AddNamespace('u', 'urn:schemas-microsoft-com:unattend')
+    if ($xml.SelectSingleNode('//u:Disk/u:WillWipeDisk', $ns).InnerText -ne 'true' -or
+        $xml.SelectSingleNode('//u:InstallTo/u:PartitionID', $ns).InnerText -ne '3' -or
+        $xml.SelectNodes('//u:CreatePartition', $ns).Count -ne 3) { throw 'UEFI-levymaarittely on virheellinen.' }
+    $command = $xml.SelectSingleNode('//u:RunSynchronousCommand/u:Path', $ns).InnerText
+    if ($command.Length -gt 259 -or $command -notmatch 'LABANSWER' -or $command -notmatch 'LabNetwork\.ps1') {
+        throw "Vastaustiedoston verkkokomento on virheellinen: $($command.Length) merkkia."
+    }
+    $innerCommand = $command.Substring($command.IndexOf(' -Command "') + 11)
+    $innerCommand = $innerCommand.Substring(0, $innerCommand.Length - 1)
+    [void][System.Management.Automation.Language.Parser]::ParseInput($innerCommand, [ref]$networkTokens, [ref]$networkErrors)
+    if ($networkErrors.Count) { throw 'Vastaustiedoston verkkokomennon PowerShell-syntaksi on virheellinen.' }
+    $script:networkRan = $false
+    $script:mockVolumes = @([pscustomobject]@{ DriveLetter = 'E' })
+    Invoke-Expression $innerCommand
+    if (-not $script:networkRan) { throw 'Vastaustiedoston komento ei suorittanut verkkoskriptia.' }
+    $script:mockVolumes = @()
+    Assert-Throws { Invoke-Expression $innerCommand } 'Lab answer media not found'
+    $script:mockVolumes = @([pscustomobject]@{ DriveLetter = 'E' }, [pscustomobject]@{ DriveLetter = 'F' })
+    Assert-Throws { Invoke-Expression $innerCommand } 'Lab answer media not found'
+}
 
 $script:HyperVVmInventory = @(
     [pscustomobject]@{ Name = 'Other'; Id = [guid]::NewGuid().ToString(); OS = 'Tuntematon'; State = 'Off'; CPU = 2; MemoryMB = 4096; Switch = 'Other' },

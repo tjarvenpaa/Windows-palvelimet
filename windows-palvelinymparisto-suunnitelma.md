@@ -93,6 +93,7 @@ Suunnitelma hyväksyttiin toteutuksen pohjaksi seuraavin valinnoin:
 - Virtuaalikoneiden ja vastaustiedostojen tallennussijainti on skriptin vieressä oleva `WindowsCourseLab`-hakemisto. Jos hakemisto on jo olemassa, skripti pyytää vahvistuksen, tarkistaa oikeudet sekä suunniteltujen tiedostopolkujen mahdolliset ristiriidat eikä korvaa tiedostoja.
 - Ensimmäinen versio käyttää staattisia verkkoasetuksia. DHCP:tä ei oteta käyttöön.
 - Windows-asennus tehdään valvomattomasti. Salasana kysytään ajon aikana. Hyper-V:n vastaustiedosto-ISO luodaan Windows ADK:n `oscdimg.exe`-työkalulla; skripti ei asenna ADK:ta.
+- Hyper-V:n vastaus-ISO sisältää `Autounattend.xml`-tiedoston ja erillisen `LabNetwork.ps1`-verkkoskriptin. Windowsin specialize-vaihe hakee skriptin `LABANSWER`-nimiseltä vastausmedialta. Median täytyy olla liitettynä asennuksen ajan; IP- ja DNS-asetukset tehdään vieraskoneessa.
 - Vastaustiedostot säilytetään asennuksen jälkeen mahdollista uudelleenasennusta varten. Ne voivat sisältää asennuksessa käytetyn ylläpitäjäsalasanan, joten lab-hakemisto on arkaluonteinen. Skripti rajaa hakemiston käyttöoikeudet; käyttäjä vastaa tiedostojen suojaamisesta ja poistamisesta, kun niitä ei enää tarvita.
 - Palvelimille asennetaan vain Windows-peruskäyttöjärjestelmä. Palvelinroolit ja niiden asetukset rajataan myöhempään työhön.
 - VM-resurssien määrät toteutetaan oletusarvoina, jotka käyttäjä voi tarkistaa/muuttaa ennen luontia. Hostin todellinen kapasiteetti tarkistetaan ajon aikana.
@@ -120,6 +121,8 @@ Poisto tunnistaa VM:t manifestiin tallennetuilla tunnisteilla ja vaatii erillise
 Poiston jälkeen virtuaalilevyt, vastaustiedostot ja muut lab-hakemiston tiedostot jäävät paikalleen, ja ne tulee tarkistaa sekä tarvittaessa poistaa käsin. Hyper-V lisää VM-tunnuksille lukuoikeudet käytettyihin asennus-ISOihin; nämä oikeudet jäävät myös poiston jälkeen ja ne voi tarvittaessa poistaa tiedostojen suojausasetuksista. Keskeytyneessä käyttöönotossa resurssi voi jäädä ilman manifestin omistustietoa, jolloin sitä ei poisteta automaattisesti vaan se on tarkistettava käsin.
 
 Skriptin aiemmilla versioilla luodusta manifestista ei voi aina päätellä verkkoresurssien omistajuutta turvallisesti. Tällaisen manifestin poistossa verkot ja manifesti säilytetään, ja niiden tila pitää tarkistaa käsin. Uusi käyttöönotto estetään, kunnes vanha manifesti on asianmukaisen tarkistuksen jälkeen poistettu.
+
+Vastaustiedoston korjaaminen skriptissä ei muuta jo luotuja vastaus-ISOja eikä korjaa automaattisesti kesken jäänyttä Windows-asennusta. Ennen uudelleenasennusta tarkista VM:n ja virtuaalilevyn sisältö; vastaustiedoston levyosiointi tyhjentää asennuskohteena olevan levyn. Älä käytä sitä adoptoidun VM:n levylle. Vastaus-ISOjen tai virtuaalilevyjen vaihtaminen ja uudelleenasennus vaativat käyttäjän erillisen päätöksen.
 
 Deployment avaa Microsoftin lataussivut, mutta käyttäjä hankkii mediat itse. Skriptin vierestä tunnistetaan automaattisesti `server.iso` ja `win11.iso`; muutoin ISO-polut kysytään. Hyper-V:n Windows-asennus vaatii lisäksi Windows ADK:n `oscdimg.exe`-työkalun: skripti käyttää ensin viereistä tiedostoa, etsii sen sitten PATHista ja kysyy lopuksi tarvittaessa polun. Skripti ei asenna ADK:ta. VirtualBox-asennin valitaan paikallisena MSI-tiedostona virallisen lataussivun kautta. Skripti ei muuta PowerShellin suorituspolitiikkaa.
 

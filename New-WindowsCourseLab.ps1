@@ -606,7 +606,12 @@ if (-not `$nic) { throw 'Lab adapter was not found during specialize.' }
 New-NetIPAddress -InterfaceIndex `$nic.ifIndex -IPAddress '$IpAddress' -PrefixLength $PrefixLength -DefaultGateway '$Gateway' -ErrorAction Stop
 Set-DnsClientServerAddress -InterfaceIndex `$nic.ifIndex -ServerAddresses '$Dns' -ErrorAction Stop
 "@
-    $encodedNetwork = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($networkScript))
+    $networkPath = Join-Path $stage 'LabNetwork.ps1'
+    Set-Content -LiteralPath $networkPath -Value $networkScript -Encoding UTF8
+    Set-PrivateAcl $networkPath
+    $networkCommand = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$v=@(Get-Volume -FileSystemLabel LABANSWER -ErrorAction Stop); if($v.Count -ne 1 -or !$v[0].DriveLetter){throw ''Lab answer media not found''}; & ($v[0].DriveLetter+'':\LabNetwork.ps1'')"'
+    if ($networkCommand.Length -gt 259) { throw 'Vastaustiedoston verkkokomento ylittaa Windowsin 259 merkin rajan.' }
+    $escapedNetworkCommand = [Security.SecurityElement]::Escape($networkCommand)
     $setupComponent = '<component name="Microsoft-Windows-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><DiskConfiguration><Disk wcm:action="add"><DiskID>0</DiskID><WillWipeDisk>true</WillWipeDisk><CreatePartitions><CreatePartition wcm:action="add"><Order>1</Order><Type>EFI</Type><Size>260</Size></CreatePartition><CreatePartition wcm:action="add"><Order>2</Order><Type>MSR</Type><Size>16</Size></CreatePartition><CreatePartition wcm:action="add"><Order>3</Order><Type>Primary</Type><Extend>true</Extend></CreatePartition></CreatePartitions><ModifyPartitions><ModifyPartition wcm:action="add"><Order>1</Order><PartitionID>1</PartitionID><Format>FAT32</Format><Label>System</Label></ModifyPartition><ModifyPartition wcm:action="add"><Order>2</Order><PartitionID>3</PartitionID><Format>NTFS</Format><Label>Windows</Label><Letter>C</Letter></ModifyPartition></ModifyPartitions></Disk><WillShowUI>OnError</WillShowUI></DiskConfiguration><UserData><AcceptEula>true</AcceptEula></UserData><ImageInstall><OSImage><InstallFrom><MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>{0}</Value></MetaData></InstallFrom><InstallTo><DiskID>0</DiskID><PartitionID>3</PartitionID></InstallTo></OSImage></ImageInstall></component>' -f $ImageIndex
     $specializeShell = '<component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"><ComputerName>{0}</ComputerName><TimeZone>FLE Standard Time</TimeZone></component>' -f $escapedName
     $oobeShell = if ($OsKind -eq 'Server') {
@@ -621,7 +626,7 @@ Set-DnsClientServerAddress -InterfaceIndex `$nic.ifIndex -ServerAddresses '$Dns'
   <settings pass="windowsPE">$setupComponent</settings>
   <settings pass="specialize">
     <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
-      <RunSynchronous><RunSynchronousCommand wcm:action="add"><Order>1</Order><Description>Configure isolated lab network</Description><Path>powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encodedNetwork</Path></RunSynchronousCommand></RunSynchronous>
+      <RunSynchronous><RunSynchronousCommand wcm:action="add"><Order>1</Order><Description>Configure isolated lab network</Description><Path>$escapedNetworkCommand</Path></RunSynchronousCommand></RunSynchronous>
     </component>
     $specializeShell
   </settings>
